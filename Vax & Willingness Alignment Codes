@@ -1,0 +1,361 @@
+---
+title: "R Notebook"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: yes
+    toc_float: true
+---
+
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_knit$set(root.dir = "../")
+
+library(here)
+library(tidyverse)
+library(psych)
+library(lavaan)
+```
+
+# Load data
+```{r}
+data <- read_csv(here("data.mi.csv"))
+```
+
+# Extract Vax_related variable names
+```{r}
+vaxs <- c('vaccine_attitudes_9_midneutral','vaccine_attitudes_2_midneutral',
+          'vaccine_attitudes_3_midneutral','vaccine_attitudes_4_midneutral',
+          'vaccine_attitudes_5_midneutral','vaccine_attitudes_6_midneutral')
+```
+
+# Reverse coding
+```{r}
+#data$vaccine_attitudes_9_midneutral <- 8-data$vaccine_attitudes_9_midneutral
+#data$vaccine_attitudes_2_midneutral <- 8-data$vaccine_attitudes_2_midneutral
+#data$vaccine_attitudes_3_midneutral <- 8-data$vaccine_attitudes_3_midneutral
+#data$vaccine_attitudes_6_midneutral <- 8-data$vaccine_attitudes_6_midneutral
+data$vaccine_attitudes_4_midneutral <- 8-data$vaccine_attitudes_4_midneutral
+data$vaccine_attitudes_5_midneutral <- 8-data$vaccine_attitudes_5_midneutral
+```
+
+# Start with English version
+```{r}
+data.eng <- data[data$UserLanguage=='EN',]
+```
+
+# separate dataset into two for EFA and CFA
+```{r}
+set.seed(2053480746)
+```
+
+# random separation
+```{r}
+picked = sample(seq_len(nrow(data.eng)),size = nrow(data.eng)/2)
+EFA =data.eng[picked,vaxs]
+CFA =data.eng[-picked,vaxs]
+```
+
+# do EFA
+## bartlett test for assumption
+```{r}
+# Test for homoscedasticity -- equal variance between groups
+# Install & load EFA tools
+#library(EFAtools)
+# X2(15) = 1345.22, p < .001 -> suitable!
+EFAtools::BARTLETT(EFA)
+```
+
+# Kaiser-Meyer-Olkin measure
+```{r}
+# Statistically test if data is suitable for factor analysis
+#measures sampling adequacy for each variable in the model and the complete model. The statistic is a measure of the proportion of variance among variables that might be common variance. The higher the proportion, the higher the KMO-value, the more suited the data is to factor analysis
+# Overall: 0.819 -> suitable!
+EFAtools::KMO(EFA)
+```
+
+# parallel
+```{r}
+#install.packages("EFA.dimensions")
+#Parallel analysis, also known as Horn's parallel analysis, is a statistical method used to determine the number of components to keep in a principal component analysis or factors to keep in an exploratory factor analysis.
+
+# n.factor = 1
+# minimum average partial
+EFA.dimensions::PA_FA(EFA)
+```
+
+```{r}
+# Velicer's minimum average partial (MAP) test for determining the number of components, which focuses on the common variance in a correlation matrix
+# n.factor = 1
+EFA.dimensions::MAP(EFA)
+```
+
+# HULL
+```{r}
+# The Hull method aims to find a model with an optimal balance between model fit and number of parameters. That is, it aims to retrieve only major factors (Lorenzo-Seva, Timmerman, & Kiers, 2011). 
+# n.factor = 1
+EFAtools::HULL(EFA)
+```
+
+# Kaiser-Guttman
+```{r}
+# n.factor = 1
+EFAtools::KGC(EFA)
+```
+
+
+# unanimously n.factor = 1
+```{r}
+fa(EFA,nfactors = 1)
+```
+
+# do CFA to test the one factor model
+```{r}
+cfa.model.1<-'VAXS =~ vaccine_attitudes_9_midneutral + vaccine_attitudes_2_midneutral+
+  vaccine_attitudes_3_midneutral + vaccine_attitudes_4_midneutral+
+  vaccine_attitudes_5_midneutral + vaccine_attitudes_6_midneutral'
+
+cfa.eng.1 <- cfa(model=cfa.model.1,data=CFA,estimator='WLSMV')
+
+result.cfa.eng.1<-standardizedSolution(cfa.eng.1)
+
+result.cfa.eng.1[result.cfa.eng.1$op == '=~',]
+```
+
+# set and examine fitmeasures
+```{r}
+#rmsea.scaled         srmr   cfi.scaled   tli.scaled 
+#0.15156063   0.06241046   0.73490396   0.55817326 
+
+fits <- c('rmsea.scaled','srmr','cfi.scaled','tli.scaled')
+fitMeasures(cfa.eng.1)[fits]
+```
+Not good. Revmove 4 with lowest loadings
+# Refit CFA
+```{r}
+cfa.model<-'
+VAXS =~ vaccine_attitudes_9_midneutral + vaccine_attitudes_2_midneutral+
+  vaccine_attitudes_3_midneutral +
+  vaccine_attitudes_5_midneutral + vaccine_attitudes_6_midneutral'
+
+cfa.eng <- cfa(model=cfa.model,data=CFA,estimator='WLSMV')
+
+result.cfa.eng<-standardizedSolution(cfa.eng)
+
+result.cfa.eng[result.cfa.eng$op               =='=~',]
+
+fitMeasures(cfa.eng)[fits]
+```
+
+ good!
+rmsea.scaled         srmr   cfi.scaled   tli.scaled 
+0.03687062   0.02003707   0.98768895   0.97537790 
+
+# let's move on to MI test across languages
+```{r}
+table(data$UserLanguage)
+```
+ shall be >= 200
+# extract 22 languages where N >= 200
+```{r}
+n.langs <- table(data$UserLanguage)
+list.langs <- labels(n.langs)[[1]]
+langs.include <- list.langs[n.langs>=200]
+n.include <- n.langs[n.langs>=200]
+```
+
+# extract data
+```{r}
+for (i in 1:length(langs.include)){
+  if (i == 1){
+    data.mi <- data[data$UserLanguage == langs.include[i],]
+  }else{
+    current <- data[data$UserLanguage == langs.include[i],]
+    data.mi <- rbind(data.mi,current)
+  }
+}
+```
+
+# general CFI
+```{r}
+cfa.whole <- cfa(model=cfa.model,data=data.mi,estimator='WLSMV')
+result.cfa.whole<-standardizedSolution(cfa.whole)
+result.cfa.whole[result.cfa.whole$op               =='=~',]
+fitMeasures(cfa.whole)[fits]
+```
+
+ good
+rmsea.scaled         srmr   cfi.scaled   tli.scaled 
+0.06738854   0.02071692   0.97780027   0.95560054 
+
+
+# start with configural MI
+```{r}
+cfa.configural <- cfa(model=cfa.model,data=data.mi,estimator='WLSMV',
+                    group = 'UserLanguage')
+fitMeasures(cfa.configural)[fits]
+```
+mediocre
+rmsea.scaled         srmr   cfi.scaled   tli.scaled 
+0.08947343   0.02868669   0.93281049   0.86562098 
+
+# metric
+```{r}
+cfa.metric <- cfa(model=cfa.model,data=data.mi,estimator='WLSMV',
+                      group = 'UserLanguage', group.equal = c("loadings"))
+fitMeasures(cfa.metric)[fits]
+```
+bad
+rmsea.scaled         srmr   cfi.scaled   tli.scaled 
+0.11347166   0.09049536   0.80941129   0.78386847 
+
+```{r}
+fitMeasures(cfa.metric)[fits]-fitMeasures(cfa.configural)[fits]
+```
+failed!
+0.02399823   0.06180867  -0.12339920  -0.08175250 
+
+# measurement alignment test
+# extract parameters
+```{r}
+vaxs.1 <- c('vaccine_attitudes_9_midneutral','vaccine_attitudes_2_midneutral',
+          'vaccine_attitudes_3_midneutral',
+          'vaccine_attitudes_5_midneutral','vaccine_attitudes_6_midneutral')
+
+#install.packages("sirt")
+library(sirt)
+par <- invariance_alignment_cfa_config(dat = data.mi[,vaxs.1], 
+                                       group = data.mi$UserLanguage)
+```
+
+# do alignment
+```{r}
+mod1 <- invariance.alignment(lambda = par$lambda, nu =
+        par$nu, align.scale = c(0.2, 0.4), align.pow = c(0.25, 0.25))
+```
+
+# test performance
+```{r}
+mod1$es.invariance['R2',]
+```
+
+absorbed the most of non-invariance in both loadings and intercepts.
+good
+loadings intercepts 
+0.9673737  0.9795263 
+
+then, calculated aligned/adjusted latent factor scores for each language
+
+```{r}
+# function to estimate factor score with
+# loadings (lambda.aligned) and intercepts (nu.aligned)
+# through inverse matrix
+aligned.factor.scores <- function(lambda,nu,y){
+  # calculate inverse matrix
+  lambda1 <- ginv((lambda))
+  # create matrix for nu
+  ns <- nrow(y)
+  nus <- matrix(nu,nrow=ns,ncol=length(nu),byrow=T)
+  # y - nu
+  y_nu <- y - nus
+  # f = inv(lambda)*(y-nu)
+  F <- lambda1 %*% t(as.matrix(y_nu))
+}
+```
+
+
+# calculate score for each country
+```{r}
+#install.packages("MASS")
+library(MASS)
+
+for (i in 1:length(langs.include)){
+  if (i == 1){
+    # create new matrix
+    data.aligned <- data.mi[data.mi$UserLanguage==langs.include[i],]
+    # aligned factor score
+    F <- aligned.factor.scores(mod1$lambda.aligned[i,],
+          mod1$nu.aligned[i,],
+          data.mi[data.mi$UserLanguage==langs.include[i],vaxs.1])
+    data.aligned$vax.attitude <- t(F)
+  }else
+  {
+    # bind
+    current <- data.mi[data.mi$UserLanguage==langs.include[i],]
+    F <- aligned.factor.scores(mod1$lambda.aligned[i,],
+            mod1$nu.aligned[i,],
+            current[,vaxs.1])
+    current$vax.attitude <- t(F)
+    data.aligned <- rbind(data.aligned,current)
+  }
+}
+```
+
+
+# test alpha across different languages (only 22 languages)
+```{r}
+alphas <- as.vector(length(langs.include),mode='list')
+alphas.value <- matrix(ncol=1,nrow=length(langs.include))
+for (i in 1:length(langs.include)){
+  alphas[[i]]<-psych::alpha(data.mi[data.mi$UserLanguage==langs.include[i],
+                      vaxs.1], check.keys = T)  
+  alphas.value[i] <- alphas[[i]]$total$std.alpha
+}
+cbind(langs.include,as.data.frame(as.numeric(alphas.value)))
+```
+
+# whole data
+```{r}
+psych::alpha(data.mi[,vaxs.1],check.keys = T)
+```
+
+# correlation test
+# attitude, vaccination intention, trust
+# (health system, WHO, governmental effort, scientific research)
+# compliance (indoor mask, outdoor mask, social distancing)
+```{r}
+corr.test(data.aligned[,c('vax.attitude','vaccine_midneutral',
+                          'trust_4','trust_5','trust_6','trust_7',
+                          'compliance_2','compliance_3','compliance_4')])
+```
+
+# save result
+```{r}
+#save.image('vaccination_attitude.RData')
+```
+
+# descriptive statistics
+# N, gender and age by language
+# N
+```{r}
+table(data.aligned$UserLanguage)
+```
+# gender
+```{r}
+table(data.aligned$gender,data.aligned$UserLanguage)
+```
+
+# percentage
+```{r}
+table(data.aligned$gender,data.aligned$UserLanguage      ) /
+  matrix(colSums(table(data.aligned$gender,data.aligned$UserLanguage      )),
+         nrow=3,ncol=ncol(table(data.aligned$gender,data.aligned$UserLanguage)),
+         byrow=T)
+```
+
+# age
+```{r}
+describeBy(data.aligned$age,group=data.aligned$UserLanguage)
+```
+
+# factor score
+```{r}
+describeBy(data.aligned$vax.attitude,group=data.aligned$UserLanguage)
+```
+
+# whole data
+```{r}
+table(data.aligned$gender)/sum(table(data.aligned$gender))
+describe(data.aligned$age)
+describe(data.aligned$vax.attitude)
+```
+
